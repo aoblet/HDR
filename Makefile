@@ -4,7 +4,7 @@ LIB      = -ljpeg
 INCLUDES = -I ~/eigen/
 CXXFLAGS += $(INCLUDES)
 
-OBJ      = ImageException.o Image.o ImageRGB.o ioJPG.o exif.o main.o 
+OBJ      = ImageException.o Image.o ImageRGB.o ioJPG.o exif.o HdrCompute.o main.o 
 RM       = rm -f
 BIN      = hdr
 DIRNAME  = $(shell basename $$PWD)
@@ -44,7 +44,12 @@ exif.o : exif.cpp exif.h
 	$(CXX) $(CXXFLAGS) -c $<  
 	@echo "done..."
 
-main.o : main.cpp exif.o ImageRGB.o exif.o ioJPG.o 
+HdrCompute.o: HdrCompute.cpp HdrCompute.hpp
+	@echo "compile HdrCompute"
+	$(CXX) $(CXXFLAGS) -c $<
+	@echo "done..."
+
+main.o : main.cpp exif.o ImageRGB.o exif.o ioJPG.o HdrCompute.o
 	@echo "compile main"
 	$(CXX) $(CXXFLAGS) -c $<  
 	@echo "done..."
