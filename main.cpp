@@ -10,6 +10,9 @@
 #include "ImageRGB.hpp"
 #include "ioJPG.hpp"
 #include "exif.h"
+#include "HdrCompute.hpp"
+#include <limits>
+#include <string>
 
 using namespace kn;
 
@@ -73,13 +76,13 @@ void loadImages(const int argc, char **argv, std::vector<ImageRGB8u> &images, st
       exifParsingError(parseSuccess);
       exit(0);
     }
-    std::cout << "   wxh       : " << exifReader.ImageWidth << " x " << exifReader.ImageHeight << std::endl;
-    std::cout << "   exposure  : " << exifReader.ExposureTime << " s" << std::endl;
-    std::cout << "   flash     : " << ((exifReader.Flash==0)?"no":"yes") << std::endl;
-    std::cout << "   camera    : " << exifReader.Model << std::endl;
-    std::cout << "   ISO       : " << exifReader.ISOSpeedRatings << std::endl;
-    std::cout << "   apperture : " << exifReader.FNumber << std::endl;
-    std::cout << std::endl;
+    // std::cout << "   wxh       : " << exifReader.ImageWidth << " x " << exifReader.ImageHeight << std::endl;
+    // std::cout << "   exposure  : " << exifReader.ExposureTime << " s" << std::endl;
+    // std::cout << "   flash     : " << ((exifReader.Flash==0)?"no":"yes") << std::endl;
+    // std::cout << "   camera    : " << exifReader.Model << std::endl;
+    // std::cout << "   ISO       : " << exifReader.ISOSpeedRatings << std::endl;
+    // std::cout << "   apperture : " << exifReader.FNumber << std::endl;
+    //std::cout << std::endl;
 
     // update exposure
     exposure.push_back((double)exifReader.ExposureTime);
@@ -101,17 +104,40 @@ int main(int argc, char **argv)
   std::vector<double> exposure;
   loadImages(argc, argv, images, exposure);
 
+  std::vector<Eigen::MatrixXi> imagesMatrixGray, imagesMatrixR, imagesMatrixG, imagesMatrixB;
 
-  // draw something
-  for(uint x=images[0].width()/4; x<images[0].width()*3/4.0; ++x)
-    for(uint y=images[0].height()/4; y<images[0].height()*3/4.0; ++y){
-      images[0](x,y)[0] = 255;  // R
-      images[0](x,y)[1] = 0;    // G
-      images[0](x,y)[2] = 0;    // B
-    }
+  //tranform images to eigen matrix
+  for(unsigned i = 0; i < images.size(); ++i) {
+    Eigen::MatrixXi tmpG(images[i].height(), images[i].width());
+    Eigen::MatrixXi tmpR(images[i].height(), images[i].width());
+    Eigen::MatrixXi tmpGreen(images[i].height(), images[i].width());
+    Eigen::MatrixXi tmpB(images[i].height(), images[i].width());
 
-  // save the final image
-  saveJPG(images[0],"output/test.jpg");
+    HdrCompute::transformImageToMatrixGray(images[i], tmpG);
+    HdrCompute::transformImageToMatrix(images[i], tmpR, tmpGreen, tmpB);
+
+    imagesMatrixGray.push_back(tmpG);
+    imagesMatrixR.push_back(tmpR);
+    imagesMatrixG.push_back(tmpGreen);
+    imagesMatrixB.push_back(tmpB);
+  }
+
+
+  uint widthImage = images[0].width();
+  uint heightImage = images[0].height();      
+
+  //select pixels for least squares
+  std::vector<Eigen::Vector2i> pixels;
+   for(uint x=widthImage/2; x<widthImage/2 + 150; ++x){
+      pixels.push_back(Eigen::Vector2i(x,heightImage/2));
+  }
+
+  ImageRGB8u final(widthImage, heightImage);
+
+  //HdrCompute::handleGray(final, pixels, imagesMatrixGray, exposure, 0,255);
+  HdrCompute::handleRGB(final, pixels, imagesMatrixR,imagesMatrixG,imagesMatrixB,exposure,0,255);
+  
+  saveJPG(final,"../output/internet-255.jpg");
 
   return 0;
 }
