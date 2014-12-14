@@ -2,163 +2,192 @@
 #include <cmath>
 #include <stdexcept>
 #include <limits>
+#include <fstream>
 
 Eigen::VectorXi HdrCompute::weightCurve(int const valueMin, int const valueMax){
-	Eigen::VectorXi weight = Eigen::VectorXi::Ones(256);
-	for(int i=valueMin; i<=valueMax; ++i){
-		if(i > 0.5*	(valueMin + valueMax))
-			weight(i) = valueMax - i;
-		else
-			weight(i) = i - valueMin;
-	}
-	return weight;
+    if(valueMin < 0 || valueMax > 255)
+        throw std::invalid_argument("valueMin-valueMax incorrect for weightCurve");
+
+    Eigen::VectorXi weight = Eigen::VectorXi::Ones(256);
+
+    for(int i=valueMin; i<=valueMax; ++i){
+        if(i > 0.5*	(valueMin + valueMax))
+            weight(i) = valueMax - i;
+        else
+            weight(i) = i - valueMin;
+    }
+    return weight;
 }
 
-Eigen::VectorXd HdrCompute::responseRecovery(std::vector <Eigen::MatrixXi> const& images , 
-									 std::vector <double> const& exposure ,
-									 std::vector <Eigen::Vector2i> const& pixels ,
-									 int const valueMin , 
-									 int const valueMax ,
-									 double const lambda){
-	if(images.size() <= 1)
-		throw std::invalid_argument("responseRecovery: Images vectors must be greater than 1");
+Eigen::VectorXd HdrCompute::responseRecovery(std::vector <Eigen::MatrixXi> const& images ,
+                                             std::vector <double> const& exposure ,
+                                             std::vector <Eigen::Vector2i> const& pixels ,
+                                             int const valueMin ,
+                                             int const valueMax ,
+                                             double const lambda){
+    if(images.size() < 2)
+        throw std::invalid_argument("responseRecovery: Images vectors must be greater than 1");
 
-	uint Z = 256;
-	int NP = pixels.size()*images.size();
+    uint NP = pixels.size()*images.size(), Z = 256;
 
-	if( (int)(NP - pixels.size()) < valueMax - valueMin)
-		throw std::invalid_argument("responseRecovery: No solution if N(P-1) < Zmax - Zmin");
+    if( (int)(NP - pixels.size()) < valueMax - valueMin)
+        throw std::invalid_argument("responseRecovery: No solution if N(P-1) < Zmax - Zmin");
 
-	Eigen::MatrixXd A = Eigen::MatrixXd::Zero( NP+Z+1, Z+pixels.size() );
-	Eigen::VectorXd x(Z + pixels.size()), b = Eigen::VectorXd::Zero(A.rows());
+    Eigen::VectorXi	w(HdrCompute::weightCurve(valueMin,valueMax));
+    Eigen::MatrixXd A = Eigen::MatrixXd::Zero( NP+Z-1, Z+pixels.size() );
+    Eigen::VectorXd x(Z + pixels.size()), b = Eigen::VectorXd::Zero(A.rows());
 
-	Eigen::VectorXi	w(HdrCompute::weightCurve(valueMin,valueMax));
+    int currentLine =0, valPix;
+    //fill A and b
+    for( uint i=0; i<pixels.size(); ++i ){
+        for( uint j=0; j< images.size(); ++j){
+            valPix = images[j](pixels[i](1),pixels[i](0));
 
-	int currentLine =0;
-	int valPix;
+            A(currentLine, valPix) = w(valPix);			//according g(Z)
+            A(currentLine, Z+i) = -w(valPix);			//according Ei
+            b(currentLine) = w(valPix)*log(exposure[j]);
+            ++currentLine;
+        }
+    }
 
-	//fill A and b
-	for( uint i=0; i<pixels.size(); ++i ){
-		for( uint j=0; j< images.size(); ++j){
-			valPix = images[j](pixels[i](1),pixels[i](0));
+    //scale factor
+    A(currentLine, 128) =1;
+    b(currentLine) = 1;
+    ++currentLine;
 
-			A(currentLine, valPix) = w(valPix);			//according g(Z)
-			A(currentLine, Z+i) = -w(valPix);			//according Ei
-			b(currentLine) = w(valPix)*log(exposure[j]);
-			++currentLine;
-		}
-	}
+    //fill for smoothness
+    for( uint i=1; i<Z-1; ++i){
+        A(currentLine,i-1) = w(i)*lambda;
+        A(currentLine,i)   = w(i)*-2*lambda;
+        A(currentLine,i+1) = w(i)*lambda;
+        ++currentLine;
+    }
 
-	//scale factor
-	A(currentLine++, Z/2) = 1;
-	b(currentLine-1) = 1;
-
-	//fill for smoothness	
-	A(currentLine, 0) = w(0)*-2*lambda;
-	A(currentLine, 1) = w(0)*lambda;
-	++currentLine;
-
-	for( uint i=1; i<Z-1; ++i){
-		A(currentLine,i-1) = w(i)*lambda;
-		A(currentLine,i)   = w(i)*-2*lambda;
-		A(currentLine,i+1) = w(i)*lambda;
-		++currentLine;
-	}
-
-	A(currentLine, Z-2) = w(Z-1)*lambda;
-	A(currentLine, Z-1) = w(Z-1)*-2*lambda;
-
-	//solve according least squares
-	x = (A.transpose()*A).inverse()*A.transpose()*b;
-	return x.block(0,0,Z,1);
+    //solve according least squares
+    x = (A.transpose()*A).inverse()*A.transpose()*b;
+    return x.head(256);
 }
 
-Eigen::MatrixXd HdrCompute::computeRadianceMap(std::vector <Eigen::MatrixXi > const& images ,
-							Eigen::VectorXd const& g,
-							std::vector <double > const& exposure ,
-							int const valueMin ,
-							int const valueMax){
+Eigen::MatrixXd HdrCompute::computeRadianceMap( std::vector <Eigen::MatrixXi > const& images ,
+                                                Eigen::VectorXd const& g,std::vector <double> const& exposure ,
+                                                int const valueMin ,int const valueMax,
+                                                double &valueMinIrradiance,double &valueMaxIrradiance,
+                                                const bool outputLinear){
 	if(images.size() <= 1)
 		throw std::invalid_argument("computeRadianceMap: images size invalid");
 
-	Eigen::MatrixXd irradiance = Eigen::MatrixXd::Zero(images[0].rows(), images[0].cols());
+    uint width=images[0].cols(), height=images[0].rows(), valPix;
+    double tmpDenominator;
+    valueMaxIrradiance = (valueMinIrradiance = std::numeric_limits<double>::infinity());
+
+    Eigen::MatrixXd irradiance = Eigen::MatrixXd::Zero(height, width);
 	Eigen::VectorXi w(HdrCompute::weightCurve(valueMin,valueMax));
 
-	uint width=images[0].cols(), height=images[0].rows(), valPix, xImage, yImage;
-	double tmpDenominator;
+    for(uint xImage=0; xImage<width; ++xImage){
+        for(uint yImage=0; yImage<height; ++yImage){
+            tmpDenominator=0;
+            //we also include ponderation here
+            for(uint j =0; j< images.size(); ++j){
+                valPix = images[j](yImage, xImage);
+                irradiance(yImage,xImage) += w(valPix)*(g(valPix)-log(exposure[j]));
+                tmpDenominator += w(valPix);
+            }
+            irradiance(yImage, xImage) /= tmpDenominator;
+            irradiance(yImage, xImage) = outputLinear ? irradiance(yImage,xImage) : exp(irradiance(yImage,xImage));
 
-	for(uint i =0; i< width*height; ++i){
-		tmpDenominator=0;
-		
-		xImage = i%width; //images pixels line to rect
-		yImage = i/width;
-
-		for(uint j =0; j< images.size(); ++j){
-			valPix = images[j](yImage, xImage);
-			irradiance(yImage,xImage) += (w(valPix)*g(valPix))-(w(valPix)*log(exposure[j]));
-			tmpDenominator += w(valPix);
-		}
-		tmpDenominator = tmpDenominator == 0 ? 1 : tmpDenominator;
-		irradiance(yImage, xImage) /= tmpDenominator;
-		irradiance(yImage, xImage) = exp(irradiance(yImage,xImage));
-
+            //compute properly min max
+            if(!isnan(irradiance(yImage, xImage))){
+                if(valueMaxIrradiance == std::numeric_limits<double>::infinity() || irradiance(yImage, xImage) > valueMaxIrradiance)
+                    valueMaxIrradiance = irradiance(yImage, xImage);
+                if(valueMinIrradiance == std::numeric_limits<double>::infinity() || irradiance(yImage, xImage) < valueMinIrradiance)
+                    valueMinIrradiance = irradiance(yImage, xImage);
+            }
+        }
 	}
-
-	return irradiance;
+    return irradiance;
 }
 
-//devebec version: irradiance storage = Ei != lnEi with range radiance acceptation
-Eigen::MatrixXi HdrCompute::toneMapping(char channel, int const width, int const height, Eigen::MatrixXd const& irradiance, kn::ImageRGB8u & res){
-		
-	double 	minIrradiance = irradiance.minCoeff(), 
-			maxIrradiance = (irradiance.maxCoeff() - minIrradiance)*0.02;
+void HdrCompute::toneMappingLinear(char channel, Eigen::MatrixXd const& irradiance,  double minIrradiance,  double maxIrradiance, kn::ImageRGB8u & res){
+    std::cout << "Irradiance min/max (toneMappingLinear)\n" <<minIrradiance << " " << maxIrradiance << std::endl;
 
-	std::cout << "Irradiance min/max (toneMapping)\n" <<minIrradiance << " " << maxIrradiance << std::endl;
+    maxIrradiance -= minIrradiance;
 
-	Eigen::MatrixXi resCompute = Eigen::MatrixXi::Zero(height,width);
-	double  tmpValPixel;
+    std::vector<int> channels;
+    uint channelInd,tmpValPixel;
+    HdrCompute::tansformChannelsToVector(channel,channels);
 
-	for(unsigned i = 0; i < irradiance.rows(); ++i) {
-		for(unsigned j = 0; j < irradiance.cols(); ++j) {
-			if(irradiance(i,j) - minIrradiance > maxIrradiance)
-				tmpValPixel = (int)round( (( maxIrradiance * 255 )/ maxIrradiance) );
-			else
-				tmpValPixel = (int)round( (((irradiance(i,j) - minIrradiance) * 255 )/ maxIrradiance));
+    //compute & fill pixel
+    for(uint i = 0; i < irradiance.rows(); ++i) {
+        for(uint j = 0; j < irradiance.cols(); ++j) {
+            tmpValPixel = abs(round(((irradiance(i,j)-minIrradiance) * 255.0)/ maxIrradiance)); //classic toneMappingLinear with lnEi
+            if(isnan(irradiance(i,j)) || tmpValPixel > 255)
+                tmpValPixel = 255;
 
-			//tmpValPixel = ((irradiance(i,j)-minIrradiance) * 255)/ maxIrradiance; //classic toneMapping with lnEi
-			resCompute(i,j) = round(tmpValPixel);
+            //fill channel(s) desired
+            for(channelInd = 0; channelInd < channels.size(); ++channelInd){
+                res(j,i)[channels[channelInd]] = tmpValPixel;
+            }
 		}						  
-	}
+    }
+}
 
-	
-	std::vector<int> channels;
+void HdrCompute::toneMappingExpClamp(double clamp, char channel, Eigen::MatrixXd const& irradiance, double minIrradiance, double maxIrradiance, kn::ImageRGB8u & res){
+    std::cout << "Irradiance min/max (toneMappingExpClamp)\n" <<minIrradiance << " " << maxIrradiance << std::endl;
 
-	if(channel == 'A'){
-		channels.push_back(0);
-		channels.push_back(1);
-		channels.push_back(2);
-	}
-	else if(channel == 'R')
-		channels.push_back(0);
-	else if(channel == 'G')
-		channels.push_back(1);
-	else if(channel == 'B')
-		channels.push_back(2);
-	else
-		throw std::invalid_argument("Invalid channel in tone mapping");
+    maxIrradiance -= minIrradiance;
+    maxIrradiance *= clamp;
 
-	uint channelInd,j;
-	for(uint i=0; i< (uint)height; ++i){
-		for(j=0; j<(uint)width; ++j){
-			for(channelInd = 0; channelInd < channels.size(); ++channelInd){
-				res(j,i)[channels[channelInd]] = resCompute(i,j);
-				//if(resCompute(i,j) < 2) //fix some bugs
-				//	res(j,i)[channels[channelInd]] = 255;
-			}
-		}
-	}
-	
-	return resCompute;
+    std::vector<int> channels;
+    uint channelInd,tmpValPixel;
+    HdrCompute::tansformChannelsToVector(channel,channels);
+
+    //compute & fill pixel
+    for(uint i = 0; i < irradiance.rows(); ++i) {
+        for(uint j = 0; j < irradiance.cols(); ++j) {
+            tmpValPixel = abs(round(((irradiance(i,j)-minIrradiance) * 255.0)/ maxIrradiance));
+            if(isnan(irradiance(i,j)) || (irradiance(i,j) - minIrradiance) > maxIrradiance)
+                tmpValPixel = 255;
+
+            //fill channel(s) desired
+            for(channelInd = 0; channelInd < channels.size(); ++channelInd){
+                res(j,i)[channels[channelInd]] = tmpValPixel;
+            }
+        }
+    }
+}
+
+void HdrCompute::toneMappingReinhard(char channel, Eigen::MatrixXd const& irradiance,  double minIrradiance,  double maxIrradiance, kn::ImageRGB8u & res){
+    std::cout << "Irradiance min/max (toneMappingReinhard)\n" <<minIrradiance << " " << maxIrradiance << std::endl;
+
+    std::vector<int> channels;
+    uint channelInd,tmpValPixel;
+    HdrCompute::tansformChannelsToVector(channel,channels);
+
+    //log average
+    double lwB=0, a, ltmp;
+    for(uint i = 0; i < irradiance.rows(); ++i) {
+        for(uint j = 0; j < irradiance.cols(); ++j) {
+            if(!isnan(irradiance(i,j)))
+                lwB += log(irradiance(i,j)-minIrradiance+0.01);
+        }
+    }
+
+    //reinhard formula: curve response: log hight concentrated at min
+    lwB = exp(lwB/(irradiance.cols()*irradiance.rows()));
+    for(uint i = 0; i < irradiance.rows(); ++i) {
+        for(uint j = 0; j < irradiance.cols(); ++j) {
+            a = 0.75;
+            ltmp =(a/ lwB)*(irradiance(i,j)-minIrradiance);
+            tmpValPixel = ((ltmp*(1+(ltmp/(50))))/(1+ltmp))*255;
+
+            if(isnan(irradiance(i,j)) || tmpValPixel > 255)
+                tmpValPixel = 255;
+
+            for(channelInd = 0; channelInd < channels.size(); ++channelInd){
+                res(j,i)[channels[channelInd]] = tmpValPixel;
+            }
+        }
+    }
 }
 
 void HdrCompute::transformImageToMatrix(kn::ImageRGB8u const& im, Eigen::MatrixXi & matrixR,
@@ -181,39 +210,75 @@ void HdrCompute::transformImageToMatrixGray(kn::ImageRGB8u const& im, Eigen::Mat
 	}
 }
 
-void HdrCompute::handleRGB( kn::ImageRGB8u & res, std::vector<Eigen::Vector2i> const& pixels, 
-							std::vector<Eigen::MatrixXi> const& imR,std::vector<Eigen::MatrixXi> const& imG, 
-							std::vector<Eigen::MatrixXi> const& imB, std::vector<double> const& exposures,
-							int const valueMin, int const valueMax){
+void HdrCompute::handleRGB( const std::string &toneMapping, kn::ImageRGB8u & res, std::vector<Eigen::Vector2i> const& pixels,
+                            std::vector<std::vector< Eigen::MatrixXi>> const& imagesMatrices , std::vector<double> const& exposures,
+                            int const valueMin, int const valueMax){
 
-	if(imR.size() < 2 || imG.size() < 2 || imB.size() < 2)
+    if(imagesMatrices.size() < 3|| imagesMatrices[0].size() <2 || imagesMatrices[1].size() < 2 || imagesMatrices[2].size() <2)
 		throw std::invalid_argument("handleRGB: incorrect size for input images");
 
-	std::numeric_limits<short> limit;
+    //0:R, 1:G, 2:B
+    Eigen::VectorXd responseRecoverieTmp;
+    char channel = 'R';
 
-	uint widthImage = imR[0].cols(), heightImage=imR[0].rows();
-	Eigen::VectorXd responseRecoveryR = HdrCompute::responseRecovery(imR, exposures, pixels, valueMin, valueMax, limit.max());
-	Eigen::VectorXd responseRecoveryG = HdrCompute::responseRecovery(imG, exposures, pixels, valueMin, valueMax, limit.max());
-	Eigen::VectorXd responseRecoveryB = HdrCompute::responseRecovery(imB, exposures, pixels, valueMin, valueMax, limit.max());
-  	
-  	Eigen::MatrixXd computeRadianceMapR = HdrCompute::computeRadianceMap(imR, responseRecoveryR, exposures, valueMin, valueMax );
-  	Eigen::MatrixXd computeRadianceMapG = HdrCompute::computeRadianceMap(imG, responseRecoveryG, exposures, valueMin, valueMax );
-  	Eigen::MatrixXd computeRadianceMapB = HdrCompute::computeRadianceMap(imB, responseRecoveryB, exposures, valueMin, valueMax );
-
-  	HdrCompute::toneMapping('R',widthImage, heightImage, computeRadianceMapR, res);
-  	HdrCompute::toneMapping('G',widthImage, heightImage, computeRadianceMapG, res);
-  	HdrCompute::toneMapping('B',widthImage, heightImage, computeRadianceMapB, res);
+    for(int i=0; i<3; ++i){
+        responseRecoverieTmp = HdrCompute::responseRecovery(imagesMatrices[i], exposures, pixels, valueMin, valueMax , 20);
+        HdrCompute::choiceToneMapping( toneMapping, res, channel, responseRecoverieTmp, imagesMatrices[i], exposures,valueMin,valueMax);
+        channel = channel == 'R' ? 'G' : 'B';
+    }
 } 
 
-void handleGray( kn::ImageRGB8u & res, std::vector<Eigen::Vector2i> const& pixels,
-				 std::vector<Eigen::MatrixXi> const& imGray, std::vector<double> const& exposures, 
-				int const valueMin, int const valueMax){
+void HdrCompute::handleGray(const std::string &toneMapping, kn::ImageRGB8u & res, std::vector<Eigen::Vector2i> const& pixels,
+                             std::vector<std::vector<Eigen::MatrixXi>> const& imGray, std::vector<double> const& exposures,
+                             int const valueMin, int const valueMax){
 
 	if(imGray.size() < 2)
 		throw std::invalid_argument("handleGray: incorrect size for input images");
 
-	uint widthImage = imGray[0].cols(), heightImage=imGray[0].rows();
-  	Eigen::VectorXd responseRecoveryGray = HdrCompute::responseRecovery(imGray, exposures, pixels, valueMin, valueMax, std::numeric_limits<short>().max() );
-  	Eigen::MatrixXd computeRadianceMapGray = HdrCompute::computeRadianceMap(imGray, responseRecoveryGray, exposures, valueMin, valueMax );
-  	HdrCompute::toneMapping('A',widthImage, heightImage, computeRadianceMapGray, res);
+    Eigen::VectorXd responseRecoveryGray = HdrCompute::responseRecovery(imGray[0], exposures, pixels, valueMin, valueMax, 20 );
+    HdrCompute::choiceToneMapping( toneMapping, res, 'A', responseRecoveryGray, imGray[0], exposures,valueMin,valueMax);
+}
+
+void HdrCompute::tansformChannelsToVector(char const channel, std::vector<int> & channelsOut){
+    channelsOut.clear();
+    if(channel == 'A'){
+        channelsOut.push_back(0);
+        channelsOut.push_back(1);
+        channelsOut.push_back(2);
+    }
+    else if(channel == 'R')
+        channelsOut.push_back(0);
+    else if(channel == 'G')
+        channelsOut.push_back(1);
+    else if(channel == 'B')
+        channelsOut.push_back(2);
+    else
+        throw std::invalid_argument("Invalid channel in tone mapping");
+}
+
+void HdrCompute::choiceToneMapping( std::string const & toneMapping, kn::ImageRGB8u & res,
+                                    char const channel,
+                                    Eigen::MatrixXd const & responseRecovery,
+                                    std::vector<Eigen::MatrixXi> const& imagesMatrices,
+                                    std::vector<double> const& exposures,
+                                    int const valueMin, int const valueMax){
+
+    double minIrradiance,maxIrradiance; //modified in computeRadiance to serve toneMapping
+    Eigen::MatrixXd computeRadianceMap;
+
+    if(toneMapping == "reinhard"){
+        computeRadianceMap = HdrCompute::computeRadianceMap(imagesMatrices, responseRecovery, exposures, valueMin, valueMax,minIrradiance, maxIrradiance,false );
+        HdrCompute::toneMappingReinhard(channel, computeRadianceMap,minIrradiance, maxIrradiance, res);
+    }
+    else if(toneMapping == "expClamp"){
+        computeRadianceMap = HdrCompute::computeRadianceMap(imagesMatrices, responseRecovery, exposures, valueMin, valueMax,minIrradiance, maxIrradiance,false );
+        HdrCompute::toneMappingExpClamp(0.02,channel, computeRadianceMap,minIrradiance, maxIrradiance, res);
+    }
+    else if(toneMapping == "linear"){
+        //linear on lnEi
+        computeRadianceMap = HdrCompute::computeRadianceMap(imagesMatrices, responseRecovery, exposures, valueMin, valueMax,minIrradiance, maxIrradiance,true );
+        HdrCompute::toneMappingLinear(channel, computeRadianceMap,minIrradiance, maxIrradiance, res);
+    }
+    else
+        throw std::invalid_argument("invalid type of toneMapping");
 }

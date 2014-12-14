@@ -1,4 +1,5 @@
 #include <Eigen/Dense>
+
 #include <vector>
 #include "ImageRGB.hpp"
 
@@ -13,25 +14,41 @@ namespace HdrCompute {
 									 int const valueMax ,
 									 double const lambda);
 
-	Eigen::MatrixXd computeRadianceMap(std::vector <Eigen::MatrixXi > const& images ,
+    //output : lnEi
+    Eigen::MatrixXd computeRadianceMap(std::vector <Eigen::MatrixXi > const& images ,
 									   Eigen::VectorXd const& g,
 									   std::vector <double > const& exposure ,
 									   int const valueMin ,
-									   int const valueMax);
+                                       int const valueMax,
+                                       double & valueMinIrradiance,
+                                       double & valueMaxIrradiance,
+                                       bool const outputLinear);
 
-	Eigen::MatrixXi toneMapping(char channel, int const width, int const height, Eigen::MatrixXd const& irradiance, kn::ImageRGB8u & res);
+    void toneMappingLinear(char channel, Eigen::MatrixXd const& irradiance, double minIrradiance, double maxIrradiance, kn::ImageRGB8u & res);
+    void toneMappingReinhard(char channel, Eigen::MatrixXd const& irradiance, double minIrradiance, double maxIrradiance, kn::ImageRGB8u & res);
+    void toneMappingExpClamp(double clamp, char channel, Eigen::MatrixXd const& irradiance, double minIrradiance, double maxIrradiance, kn::ImageRGB8u & res);
 
-	void transformImageToMatrix(kn::ImageRGB8u const& im, Eigen::MatrixXi & matrixR,
+    void choiceToneMapping(std::string const & toneMapping, kn::ImageRGB8u & res,
+                           char const channel,
+                           const Eigen::MatrixXd &responseRecovery,
+                           std::vector<Eigen::MatrixXi> const &imagesMatrices,
+                           std::vector<double> const& exposures,
+                           int const valueMin, int const valueMax);
+
+    void transformImageToMatrix(kn::ImageRGB8u const& im, Eigen::MatrixXi & matrixR,
 													  Eigen::MatrixXi & matrixG,  
 													  Eigen::MatrixXi & matrixB);
 
-	void transformImageToMatrixGray(kn::ImageRGB8u const& im, Eigen::MatrixXi & matrixGray);
+    void transformImageToMatrixGray(kn::ImageRGB8u const& im, Eigen::MatrixXi & matrixGray);
 
-	void handleRGB( kn::ImageRGB8u & res, std::vector<Eigen::Vector2i> const& pixels, 
-					std::vector<Eigen::MatrixXi> const& imR, std::vector<Eigen::MatrixXi> const& imG,
-					std::vector<Eigen::MatrixXi> const& imB, std::vector<double> const& exposures, 
-					int const valueMin, int const valueMax);
-	void handleGray( kn::ImageRGB8u & res, std::vector<Eigen::Vector2i> const& pixels,
-					 std::vector<Eigen::MatrixXi> const& imGray, std::vector<double> const& exposures, 
-					int const valueMin, int const valueMax);
+    void handleRGB(std::string const & toneMapping, kn::ImageRGB8u & res, std::vector<Eigen::Vector2i> const& pixels,
+                    const std::vector<std::vector<Eigen::MatrixXi> > &imagesMatrices, std::vector<double> const& exposures,
+                    int const valueMin, int const valueMax);
+
+    //even if only one channel, we encapsulate gray channel in std::vector to respect generecite in choiceToneMapping
+    void handleGray(std::string const & toneMapping, kn::ImageRGB8u & res, std::vector<Eigen::Vector2i> const& pixels,
+                     const std::vector<std::vector<Eigen::MatrixXi>> &imGray, std::vector<double> const& exposures,
+                     int const valueMin, int const valueMax);
+
+    void tansformChannelsToVector(char const channel, std::vector<int> & channelsOut);
 } 
