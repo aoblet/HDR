@@ -143,8 +143,8 @@ int main(int argc, char **argv)
     ImageRGB8u final(widthImage, heightImage);
 
     // Choices: expClamp, reinhard or linear
-    // HdrCompute::handleGray(final, pixels, imagesMatrixGrayEncapsulate, exposure, 0,255);
-    HdrCompute::handleRGB("expClamp", final, pixels, imagesMatricesColors, exposure,0,255);
+    HdrCompute::handleGray("reinhard",final, pixels, imagesMatrixGrayEncapsulate, exposure, 0,255);
+    //HdrCompute::handleRGB("linear", final, pixels, imagesMatricesColors, exposure,0,255);
 
     saveJPG(final,"../output/internet-3000.jpg");
 

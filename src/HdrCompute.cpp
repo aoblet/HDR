@@ -232,7 +232,7 @@ void HdrCompute::handleGray(const std::string &toneMapping, kn::ImageRGB8u & res
                              std::vector<std::vector<Eigen::MatrixXi>> const& imGray, std::vector<double> const& exposures,
                              int const valueMin, int const valueMax){
 
-	if(imGray.size() < 2)
+    if(imGray.size() == 0 || imGray[0].size() < 2)
 		throw std::invalid_argument("handleGray: incorrect size for input images");
 
     Eigen::VectorXd responseRecoveryGray = HdrCompute::responseRecovery(imGray[0], exposures, pixels, valueMin, valueMax, 20 );
