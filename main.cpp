@@ -135,7 +135,7 @@ int main(int argc, char **argv)
 
     //select pixels for least squares
     std::vector<Eigen::Vector2i> pixels;
-    for(uint x=heightImage/2-50; x<heightImage/2 - 50; ++x){
+    for(uint x=heightImage/2-50; x<heightImage/2 +50; ++x){
         pixels.push_back(Eigen::Vector2i(widthImage/2,x));
     }
 
