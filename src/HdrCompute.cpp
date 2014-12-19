@@ -272,7 +272,7 @@ void HdrCompute::choiceToneMapping( std::string const & toneMapping, kn::ImageRG
     }
     else if(toneMapping == "expClamp"){
         computeRadianceMap = HdrCompute::computeRadianceMap(imagesMatrices, responseRecovery, exposures, valueMin, valueMax,minIrradiance, maxIrradiance,false );
-        HdrCompute::toneMappingExpClamp(0.02,channel, computeRadianceMap,minIrradiance, maxIrradiance, res);
+        HdrCompute::toneMappingExpClamp(0.001,channel, computeRadianceMap,minIrradiance, maxIrradiance, res);
     }
     else if(toneMapping == "linear"){
         //linear on lnEi
